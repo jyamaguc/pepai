@@ -37,6 +37,7 @@ export interface PitchPosition {
   label: string;
   type: PositionType;
   color?: string;
+  size?: 'small' | 'medium' | 'large';
 }
 
 export interface Drill {
@@ -59,6 +60,7 @@ export interface Session {
   date: string;
   team: string;
   drills: Drill[];
+  notes?: string;
 }
 
 export const createEmptyDrill = (): Drill => ({

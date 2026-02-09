@@ -1,451 +1,409 @@
 "use client";
 
-import { useState } from "react";
-import { Drill, PitchLayout, PositionType, ArrowType } from "@/types/types";
-import { DrillGraphic } from "@/components/DrillGraphic";
+import React, { useState, useEffect, useRef } from 'react';
+import { compressSession } from '@/services/compressionService';
+import { generateDrillStream, refineDrillStream, processDrillJson } from '@/services/geminiService';
+import { Drill, Session, PitchLayout, PositionType, createEmptyDrill } from '@/types/types';
+import DrillCard from '@/components/DrillCard';
+import VoiceAssistant from '@/components/VoiceAssistant';
+import PitchVisualizer from '@/components/PitchVisualizer';
+import { useAuth } from '@/context/AuthContext';
+import { AuthModal } from '@/components/auth/AuthModal';
+import { drillService, FirestoreDrill } from '@/services/drillService';
+import { Timestamp } from 'firebase/firestore';
 
-type CreateMode = "ai" | "manual";
-
-const initialManualDrill = {
-  name: "",
-  category: "Technical",
-  duration: "15m",
-  players: "10",
-  setup: "",
-  instructionsStr: "",
-  coachingPointsStr: "",
-  layout: PitchLayout.GRID,
-};
-
-export default function Home() {
-  const [mode, setMode] = useState<CreateMode>("ai");
-  const [prompt, setPrompt] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [drills, setDrills] = useState<Drill[]>([]);
+const App: React.FC = () => {
+  const { user, logout } = useAuth();
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [drillHistory, setDrillHistory] = useState<FirestoreDrill[]>([]);
+  const [isMounted, setIsMounted] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [manual, setManual] = useState(initialManualDrill);
+  const [isSharing, setIsSharing] = useState(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
+  const [session, setSession] = useState<Session>({ 
+    id: 'initial-id', 
+    title: 'Academy Session', 
+    date: '', 
+    team: 'First Team', 
+    drills: [], 
+    notes: '' 
+  });
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!prompt.trim() || loading) return;
-    setLoading(true);
+  useEffect(() => {
+    setIsMounted(true);
+    const saved = localStorage.getItem('pepai_session');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setSession(parsed);
+      } catch (e) {
+        console.error("Failed to parse saved session", e);
+      }
+    } else {
+      setSession(prev => ({
+        ...prev,
+        id: crypto.randomUUID(),
+        date: new Date().toISOString().split('T')[0]
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isMounted) {
+      localStorage.setItem('pepai_session', JSON.stringify(session));
+    }
+  }, [session, isMounted]);
+
+  useEffect(() => {
+    if (user) {
+      drillService.ensureUserExists(user.uid, user.email);
+      loadHistory();
+    }
+  }, [user]);
+
+  const loadHistory = async () => {
+    if (user) {
+      try {
+        const history = await drillService.getUserDrills(user.uid);
+        setDrillHistory(history);
+      } catch (err) {
+        console.error("Failed to load history:", err);
+      }
+    }
+  };
+
+  if (!isMounted) {
+    return null; // Or a loading skeleton
+  }
+
+  const handleGenerate = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!prompt.trim() || isGenerating) return;
+    setIsGenerating(true);
+    setIsRetrying(false);
     setError(null);
     try {
-      const res = await fetch("/api/drills", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: prompt.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Couldn't generate drills. Check your API key and try again.");
-        return;
+      const stream = generateDrillStream(prompt);
+      let lastText = "";
+      for await (const text of stream) { 
+        if (text === "RETRYING") {
+          setIsRetrying(true);
+          continue;
+        }
+        lastText = text; 
+        setIsRetrying(false);
       }
-      if (data.drill) {
-        setDrills((prev) => [...prev, data.drill]);
-        setPrompt("");
-      } else if (Array.isArray(data.drills)) {
-        setDrills((prev) => [...prev, ...data.drills]);
-        setPrompt("");
+      const newDrill = processDrillJson(JSON.parse(lastText));
+      
+      // Save to Firestore if user is logged in
+      if (user) {
+        await drillService.saveDrill(user.uid, newDrill);
+        loadHistory();
+      }
+
+      setSession(prev => ({ ...prev, drills: [...prev.drills, newDrill] }));
+      setPrompt('');
+    } catch (err: any) { 
+      console.error(err); 
+      if (err.message?.includes("High Demand")) {
+        setError(err.message);
       } else {
-        setError("Invalid response from server.");
+        setError("Something went wrong while generating the drill.");
       }
-    } catch {
-      setError("Couldn't generate drills. Check your API key and try again.");
-    } finally {
-      setLoading(false);
+    } finally { 
+      setIsGenerating(false);
+      setIsRetrying(false);
     }
-  }
+  };
 
-  function handleManualSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  const addManualDrill = () => {
+    const newDrill = createEmptyDrill();
+    setSession(prev => ({ ...prev, drills: [...prev.drills, newDrill] }));
+  };
 
-    if (!manual.name.trim()) {
-      setError("Please enter a drill name.");
-      return;
-    }
-
-    const instructions = manual.instructionsStr
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const handleShare = async () => {
+    if (session.drills.length === 0 || isSharing) return;
+    setIsSharing(true);
     
-    const coachingPoints = manual.coachingPointsStr
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    if (instructions.length === 0) {
-      setError("Please add at least one instruction.");
-      return;
+    try {
+      // Compress session data to keep the URL short
+      const compressed = compressSession(session);
+      const shareUrl = `${window.location.origin}/share?data=${compressed}`;
+      
+      await navigator.clipboard.writeText(shareUrl);
+      setShareFeedback('Link copied to clipboard!');
+      setTimeout(() => setShareFeedback(null), 3000);
+    } catch (err) {
+      console.error("Failed to share:", err);
+      setShareFeedback('Failed to copy link.');
+      setTimeout(() => setShareFeedback(null), 3000);
+    } finally {
+      setIsSharing(false);
     }
+  };
 
-    const drill: Drill = {
-      id: crypto.randomUUID(),
-      name: manual.name.trim(),
-      category: manual.category,
-      duration: manual.duration.trim() || "15m",
-      players: manual.players.trim() || "10",
-      setup: manual.setup.trim() || "Basic setup.",
-      instructions,
-      coachingPoints,
-      positions: [],
-      arrows: [],
-      layout: manual.layout,
-    };
-
-    setDrills((prev) => [...prev, drill]);
-    setManual(initialManualDrill);
-  }
-
-  function updateManual<K extends keyof typeof manual>(key: K, value: (typeof manual)[K]) {
-    setManual((prev) => ({ ...prev, [key]: value }));
-  }
-
-  function handleDelete(index: number) {
-    setDrills((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  function handleUpdateDrill(index: number, updatedDrill: Drill) {
-    setDrills((prev) => prev.map((d, i) => (i === index ? updatedDrill : d)));
-  }
-
-  function handleClearSession() {
-    if (confirm("Are you sure you want to clear the entire session?")) {
-      setDrills([]);
+  const handleSaveAll = async () => {
+    if (!user || session.drills.length === 0 || isSavingAll) return;
+    setIsSavingAll(true);
+    try {
+      await drillService.saveMultipleDrills(user.uid, session.drills);
+      setShareFeedback('All drills saved to history!');
+      setTimeout(() => setShareFeedback(null), 3000);
+      loadHistory();
+    } catch (err) {
+      console.error("Failed to save all drills:", err);
+      setShareFeedback('Failed to save drills.');
+      setTimeout(() => setShareFeedback(null), 3000);
+    } finally {
+      setIsSavingAll(false);
     }
-  }
+  };
 
-  function handlePrint() {
-    window.print();
-  }
+  const handleSaveDrill = async (drill: Drill) => {
+    if (!user) return;
+    try {
+      const newId = await drillService.saveDrill(user.uid, drill);
+      setShareFeedback('Drill saved to history!');
+      setTimeout(() => setShareFeedback(null), 3000);
+      
+      // Update local state by adding the new drill to the top of the history
+      setDrillHistory(prev => [
+        { 
+          ...drill, 
+          id: newId, 
+          userId: user.uid, 
+          createdAt: Timestamp.now(), 
+          updatedAt: Timestamp.now() 
+        } as FirestoreDrill, 
+        ...prev
+      ]);
+      
+      loadHistory();
+    } catch (err) {
+      console.error("Failed to save drill:", err);
+      setShareFeedback('Failed to save drill.');
+      setTimeout(() => setShareFeedback(null), 3000);
+    }
+  };
+
+  const reuseDrill = (drill: Drill) => {
+    const reusedDrill = { ...drill, id: crypto.randomUUID() };
+    setSession(prev => ({ ...prev, drills: [...prev.drills, reusedDrill] }));
+    setIsHistoryOpen(false);
+  };
+
+  const updateDrill = (updated: Drill) => setSession(prev => ({ ...prev, drills: prev.drills.map(d => d.id === updated.id ? updated : d) }));
+
+  const latestDrill = session.drills.length > 0 ? session.drills[session.drills.length - 1] : undefined;
 
   return (
-    <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)]">
-      <div className="mx-auto max-w-4xl px-6 pt-16 pb-20 sm:px-10 sm:pt-20 sm:pb-24">
-        <header className="text-center mb-14 sm:mb-16">
-          <h1 className="text-4xl font-semibold tracking-tight text-[var(--foreground)] sm:text-5xl">
-            Soccer Session Builder
-          </h1>
-          <p className="mt-5 text-lg text-[var(--muted)] max-w-xl mx-auto leading-relaxed">
-            Build your team training session drill by drill. Use AI to generate specific exercises or add your own manually.
-          </p>
-        </header>
-
-        <div className="no-print mb-6 flex rounded-xl bg-[var(--card)] p-1 border border-[var(--card-border)] w-fit mx-auto">
-          <button
-            type="button"
-            onClick={() => { setMode("ai"); setError(null); }}
-            className={`rounded-lg px-5 py-2.5 text-base font-medium transition ${mode === "ai" ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-[var(--foreground)]"}`}
-          >
-            Generate with AI
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode("manual"); setError(null); }}
-            className={`rounded-lg px-5 py-2.5 text-base font-medium transition ${mode === "manual" ? "bg-[var(--accent)] text-white" : "text-[var(--muted)] hover:text-[var(--foreground)]"}`}
-          >
-            Create manually
-          </button>
+    <div className="min-h-screen bg-slate-50 pb-40 text-slate-900">
+      <header className="h-24 bg-white border-b border-slate-200 sticky top-0 z-50 px-8 lg:px-12 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg font-black text-xl">P</div>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Pep<span className="text-emerald-600">AI</span></h1>
         </div>
+        <div className="flex items-center gap-4">
+          {shareFeedback && (
+            <span className="text-emerald-600 text-xs font-bold animate-in fade-in slide-in-from-right-2">
+              {shareFeedback}
+            </span>
+          )}
+          
+          {user ? (
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setIsHistoryOpen(true)}
+                className="text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-emerald-600 transition-colors"
+              >
+                History
+              </button>
+              <button 
+                onClick={logout}
+                className="text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-red-600 transition-colors"
+              >
+                Logout
+              </button>
+              <button 
+                onClick={handleShare} 
+                disabled={session.drills.length === 0 || isSharing}
+                className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-20 transition-all flex items-center gap-3"
+              >
+                {isSharing ? 'Generating...' : 'Share Session'}
+              </button>
+            </div>
+          ) : (
+            <button 
+              onClick={() => setIsAuthModalOpen(true)}
+              className="bg-emerald-600 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg"
+            >
+              Login / Sign Up
+            </button>
+          )}
+        </div>
+      </header>
 
-        {mode === "ai" && (
-          <div className="no-print rounded-2xl border border-[var(--card-border)] bg-[var(--card)] p-6 shadow-sm sm:p-8">
-            <form onSubmit={handleSubmit}>
-              <label htmlFor="prompt" className="sr-only">
-                Describe the drill you want
-              </label>
-              <textarea
-                id="prompt"
+      <main className="max-w-[1500px] mx-auto p-12 space-y-12">
+        <section className="bg-white p-12 rounded-[3rem] shadow-xl space-y-8 border border-slate-100">
+          <input 
+            value={session.title} 
+            onChange={e => setSession(p => ({...p, title: e.target.value}))}
+            className="text-5xl font-black w-full outline-none placeholder-slate-100 tracking-tight bg-transparent"
+            placeholder="Session Title"
+          />
+          <div className="flex gap-8">
+            <div className="flex flex-col gap-2 flex-1">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Session Date</label>
+               <input type="date" value={session.date} onChange={e => setSession(p => ({...p, date: e.target.value}))} className="bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-emerald-500 outline-none w-full" />
+            </div>
+            <div className="flex flex-col gap-2 flex-1">
+               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Squad / Team</label>
+               <input type="text" value={session.team} onChange={e => setSession(p => ({...p, team: e.target.value}))} className="bg-slate-50 px-6 py-4 rounded-xl font-bold border-2 border-transparent focus:border-emerald-500 outline-none w-full" placeholder="Team Name" />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2">
+             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Session Objectives & Notes</label>
+             <textarea 
+               value={session.notes || ''} 
+               onChange={e => setSession(p => ({...p, notes: e.target.value}))} 
+               placeholder="Write session focus here..." 
+               className="bg-slate-50 px-8 py-6 rounded-[2rem] font-medium text-slate-600 border-2 border-transparent focus:border-emerald-500 outline-none w-full min-h-[120px] resize-none"
+             />
+          </div>
+        </section>
+
+        <div className="space-y-24">
+          <div className="flex items-center justify-between px-4">
+             <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Drills <span className="text-emerald-500 ml-2">{session.drills.length}</span></h2>
+             <button 
+               onClick={addManualDrill}
+               className="bg-emerald-600 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg flex items-center gap-2"
+             >
+               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" /></svg>
+               Add Drill
+             </button>
+          </div>
+          
+          {session.drills.map(d => (
+            <DrillCard 
+              key={d.id} 
+              drill={d} 
+              onRemove={() => setSession(p => ({...p, drills: p.drills.filter(x => x.id !== d.id)}))}
+              onUpdateDrill={updateDrill}
+              onSave={() => handleSaveDrill(d)}
+              isLoggedIn={!!user}
+            />
+          ))}
+
+          <div className="flex justify-center pt-8">
+            <button 
+              onClick={addManualDrill}
+              className="group bg-white border-4 border-dashed border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 text-slate-400 hover:text-emerald-600 w-full py-12 rounded-[3rem] transition-all flex flex-col items-center gap-4"
+            >
+              <div className="w-16 h-16 bg-slate-50 group-hover:bg-emerald-100 rounded-2xl flex items-center justify-center transition-colors">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" />
+                </svg>
+              </div>
+              <span className="text-xl font-black uppercase tracking-widest">Manually Add Drill</span>
+            </button>
+          </div>
+
+          {isGenerating && (
+            <div className="h-64 bg-white rounded-[3rem] border-4 border-dashed border-emerald-100 animate-pulse flex flex-col items-center justify-center gap-4">
+               <div className="w-12 h-12 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+               <p className="font-black text-emerald-600 uppercase tracking-widest text-sm">
+                 {isRetrying ? 'Pep is busy, retrying...' : 'Pep is drafting a drill...'}
+               </p>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* History Sidebar/Modal */}
+      {isHistoryOpen && (
+        <div className="fixed inset-0 z-[60] flex justify-end bg-black/50 backdrop-blur-sm">
+          <div className="h-full w-full max-w-md bg-white p-8 shadow-2xl animate-in slide-in-from-right duration-300">
+            <div className="mb-8 flex items-center justify-between">
+              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Drill History</h2>
+              <button onClick={() => setIsHistoryOpen(false)} className="text-slate-400 hover:text-slate-900">✕</button>
+            </div>
+            <div className="space-y-4 overflow-y-auto max-h-[calc(100vh-150px)] pr-2">
+              {drillHistory.length === 0 ? (
+                <p className="text-slate-400 font-medium text-center py-12">No drills saved yet.</p>
+              ) : (
+                drillHistory.map((drill) => (
+                  <div 
+                    key={drill.id} 
+                    className="group bg-slate-50 p-6 rounded-2xl border-2 border-transparent hover:border-emerald-500 transition-all cursor-pointer"
+                    onClick={() => reuseDrill(drill)}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="font-black text-slate-900 uppercase tracking-tight">{drill.name}</h3>
+                      <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">{drill.category}</span>
+                    </div>
+                    <p className="text-xs text-slate-500 font-medium line-clamp-2 mb-4">{drill.setup}</p>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-bold text-slate-400">{new Date(drill.createdAt.seconds * 1000).toLocaleDateString()}</span>
+                      <span className="text-[10px] font-black text-emerald-600 group-hover:translate-x-1 transition-transform">REUSE →</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+
+      <div className="fixed bottom-0 left-0 w-full bg-white/80 backdrop-blur-xl border-t border-slate-200 p-8 z-40">
+        <div className="max-w-[1400px] mx-auto">
+          <form onSubmit={handleGenerate} className="flex flex-col gap-2 relative">
+            <div className="relative flex items-center">
+              <input 
+                type="text" 
+                placeholder="Describe a drill: 'A 5v5 rondo with two neutrals...'" 
+                className="flex-1 bg-slate-100 rounded-2xl pl-8 pr-48 py-5 text-xl font-bold outline-none border-4 border-transparent focus:bg-white focus:border-emerald-500 shadow-inner"
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="e.g. a passing square for 8 players, 15 min … or a dribbling slalom with turns … or a 3v2 counter-pressing drill in a 30x20 area"
-                className="w-full resize-none rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-4 text-base text-[var(--foreground)] placeholder:text-[var(--muted)] transition-colors focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                rows={5}
-                disabled={loading}
+                onChange={e => {
+                  setPrompt(e.target.value);
+                  if (error) setError(null);
+                }}
+                disabled={isGenerating}
               />
-              <div className="mt-6 flex justify-end">
-                <button
-                  type="submit"
-                  disabled={loading || !prompt.trim()}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--accent)] px-6 py-3 text-base font-medium text-white transition hover:bg-[var(--accent-hover)] disabled:pointer-events-none disabled:opacity-50"
-                >
-                  {loading ? (
-                    <>
-                      <span className="size-4 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden />
-                      Generating…
-                    </>
-                  ) : (
-                    "Generate drill"
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {mode === "manual" && (
-          <div className="no-print rounded-2xl border border-[var(--card-border)] bg-[var(--card)] p-6 shadow-sm sm:p-8">
-            <form onSubmit={handleManualSubmit} className="space-y-8">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div>
-                  <label htmlFor="manual-name" className="block text-base font-semibold text-[var(--foreground)] mb-2">Name</label>
-                  <input
-                    id="manual-name"
-                    type="text"
-                    value={manual.name}
-                    onChange={(e) => updateManual("name", e.target.value)}
-                    placeholder="e.g. Passing square"
-                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="manual-category" className="block text-base font-semibold text-[var(--foreground)] mb-2">Category</label>
-                  <select
-                    id="manual-category"
-                    value={manual.category}
-                    onChange={(e) => updateManual("category", e.target.value)}
-                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  >
-                    <option>Technical</option>
-                    <option>Tactical</option>
-                    <option>Physical</option>
-                    <option>Warm-up</option>
-                    <option>Game</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                <div>
-                  <label htmlFor="manual-duration" className="block text-base font-semibold text-[var(--foreground)] mb-2">Duration</label>
-                  <input
-                    id="manual-duration"
-                    type="text"
-                    value={manual.duration}
-                    onChange={(e) => updateManual("duration", e.target.value)}
-                    placeholder="e.g. 15m"
-                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="manual-players" className="block text-base font-semibold text-[var(--foreground)] mb-2">Players</label>
-                  <input
-                    id="manual-players"
-                    type="text"
-                    value={manual.players}
-                    onChange={(e) => updateManual("players", e.target.value)}
-                    placeholder="e.g. 8-12"
-                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="manual-layout" className="block text-base font-semibold text-[var(--foreground)] mb-2">Pitch Layout</label>
-                  <select
-                    id="manual-layout"
-                    value={manual.layout}
-                    onChange={(e) => updateManual("layout", e.target.value as PitchLayout)}
-                    className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  >
-                    <option value={PitchLayout.FULL}>Full Pitch</option>
-                    <option value={PitchLayout.HALF}>Half Pitch</option>
-                    <option value={PitchLayout.GRID}>Grid / Small Area</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="manual-setup" className="block text-base font-semibold text-[var(--foreground)] mb-2">Setup</label>
-                <textarea
-                  id="manual-setup"
-                  value={manual.setup}
-                  onChange={(e) => updateManual("setup", e.target.value)}
-                  placeholder="How to set up the grid and players"
-                  rows={3}
-                  className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
+              <div className="absolute right-3 flex items-center gap-3">
+                <VoiceAssistant 
+                  session={session} 
+                  currentDrill={latestDrill}
+                  onUpdateDrill={updateDrill}
+                  onTranscriptChange={setPrompt} 
+                  isProcessing={isGenerating} 
                 />
-              </div>
-
-              <div>
-                <label htmlFor="manual-instructions" className="block text-base font-semibold text-[var(--foreground)] mb-2">Instructions (one per line)</label>
-                <textarea
-                  id="manual-instructions"
-                  value={manual.instructionsStr}
-                  onChange={(e) => updateManual("instructionsStr", e.target.value)}
-                  placeholder="Step 1: ...&#10;Step 2: ..."
-                  rows={4}
-                  className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                />
-              </div>
-
-              <div>
-                <label htmlFor="manual-coaching" className="block text-base font-semibold text-[var(--foreground)] mb-2">Coaching Points (one per line)</label>
-                <textarea
-                  id="manual-coaching"
-                  value={manual.coachingPointsStr}
-                  onChange={(e) => updateManual("coachingPointsStr", e.target.value)}
-                  placeholder="Focus on quality of pass&#10;Body position..."
-                  rows={3}
-                  className="w-full rounded-xl border border-[var(--card-border)] bg-[var(--background)] px-5 py-3 text-base text-[var(--foreground)] placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                />
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  type="submit"
-                  className="inline-flex items-center justify-center rounded-xl bg-[var(--accent)] px-6 py-3 text-base font-medium text-white transition hover:bg-[var(--accent-hover)]"
+                <button 
+                  type="submit" 
+                  disabled={!prompt.trim() || isGenerating} 
+                  className="px-8 py-4 bg-emerald-600 text-white rounded-xl font-black text-sm uppercase tracking-widest hover:bg-emerald-700 shadow-lg disabled:opacity-50 transition-all h-14"
                 >
-                  Add drill
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {error && (
-          <div
-            role="alert"
-            className="no-print mt-8 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 px-5 py-4 text-base text-red-700 dark:text-red-300"
-          >
-            {error}
-          </div>
-        )}
-
-        {drills.length > 0 && (
-          <section className="mt-16 space-y-8" aria-label="Drills">
-            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-4">
-              <h2 className="text-xl font-semibold tracking-tight text-[var(--foreground)]">
-                Your Training Session ({drills.length} drill{drills.length === 1 ? "" : "s"})
-              </h2>
-              <div className="no-print flex gap-3">
-                <button
-                  onClick={handlePrint}
-                  className="rounded-lg border border-[var(--card-border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--foreground)] hover:bg-[var(--background)] transition-colors"
-                >
-                  Print Session
-                </button>
-                <button
-                  onClick={handleClearSession}
-                  className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/30 px-4 py-2 text-sm font-medium text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
-                >
-                  Clear All
+                  {isGenerating ? 'Drafting...' : 'Create'}
                 </button>
               </div>
             </div>
-            <div className="space-y-8">
-              {drills.map((drill, i) => (
-                <DrillCard 
-                  key={drill.id || i} 
-                  drill={drill} 
-                  onDelete={() => handleDelete(i)} 
-                  onUpdate={(updated) => handleUpdateDrill(i, updated)}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+            {error && (
+              <p className="text-red-500 text-xs font-bold ml-4 animate-in fade-in slide-in-from-top-1">
+                {error}
+              </p>
+            )}
+          </form>
+        </div>
       </div>
     </div>
   );
-}
+};
 
-function DrillCard({ drill, onDelete, onUpdate }: { drill: Drill; onDelete: () => void; onUpdate: (updated: Drill) => void }) {
-  return (
-    <article className="rounded-2xl border border-[var(--card-border)] bg-[var(--card)] shadow-sm overflow-hidden print:break-inside-avoid relative">
-      <div className="border-l-4 border-[var(--accent)] pl-0">
-        <div className="p-6 sm:p-8 pl-6 sm:pl-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Text Content */}
-            <div>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <span className="text-sm font-semibold uppercase tracking-wider text-[var(--accent)] mb-1 block">
-                    {drill.category}
-                  </span>
-                  <h2 className="text-2xl font-semibold text-[var(--foreground)] flex-1 min-w-0 leading-tight">
-                    {drill.name}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={onDelete}
-                  className="no-print shrink-0 rounded-lg px-3 py-2 text-base text-[var(--muted)] hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950/50 dark:hover:text-red-400 transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)]/20"
-                  aria-label="Delete this drill"
-                >
-                  Delete
-                </button>
-              </div>
-              
-              <ul className="mt-6 flex flex-wrap gap-4 text-base">
-                <li className="inline-flex items-center gap-2 rounded-xl bg-[var(--background)] px-4 py-2.5 text-[var(--foreground)]">
-                  <span className="text-[var(--muted)]">Duration</span>
-                  <span className="font-semibold">{drill.duration}</span>
-                </li>
-                <li className="inline-flex items-center gap-2 rounded-xl bg-[var(--background)] px-4 py-2.5 text-[var(--foreground)]">
-                  <span className="text-[var(--muted)]">Players</span>
-                  <span className="font-semibold">{drill.players}</span>
-                </li>
-                <li className="inline-flex items-center gap-2 rounded-xl bg-[var(--background)] px-4 py-2.5 text-[var(--foreground)]">
-                  <span className="text-[var(--muted)]">Layout</span>
-                  <span className="font-semibold uppercase">{drill.layout}</span>
-                </li>
-              </ul>
-
-              {drill.setup && (
-                <div className="mt-8 pt-8 border-t border-[var(--card-border)]">
-                  <h3 className="text-base font-semibold text-[var(--foreground)]">Setup</h3>
-                  <p className="mt-3 text-base text-[var(--foreground)] leading-relaxed whitespace-pre-wrap">
-                    {drill.setup}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Graphic Content */}
-            <div className="space-y-4">
-              <h3 className="text-base font-semibold text-[var(--foreground)]">Visual Layout</h3>
-              <DrillGraphic drill={drill} onUpdate={onUpdate} />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8 pt-8 border-t border-[var(--card-border)]">
-            {drill.instructions?.length > 0 && (
-              <div>
-                <h3 className="text-base font-semibold text-[var(--foreground)] mb-4">Instructions</h3>
-                <ol className="space-y-5">
-                  {drill.instructions.map((instruction, j) => (
-                    <li key={j} className="flex gap-4">
-                      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/15 text-sm font-semibold text-[var(--accent)]">
-                        {j + 1}
-                      </span>
-                      <p className="text-base text-[var(--foreground)] leading-relaxed whitespace-pre-wrap">
-                        {instruction}
-                      </p>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            )}
-
-            {drill.coachingPoints?.length > 0 && (
-              <div>
-                <h3 className="text-base font-semibold text-[var(--foreground)] mb-4">Coaching Points</h3>
-                <ul className="space-y-3">
-                  {drill.coachingPoints.map((point, j) => (
-                    <li key={j} className="flex gap-3 items-start">
-                      <span className="text-[var(--accent)] mt-1.5">•</span>
-                      <p className="text-base text-[var(--muted)] leading-relaxed">
-                        {point}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </article>
-  );
-}
+export default App;
