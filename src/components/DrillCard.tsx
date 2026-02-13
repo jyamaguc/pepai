@@ -25,6 +25,35 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
   const handleRefine = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!refineText.trim() || isUpdating || readOnly) return;
+    
+    // Deduct credits before refining
+    if (!isLoggedIn) {
+      // For now, we'll just alert or you could open the auth modal if you had access to it
+      alert("Please login to refine drills.");
+      return;
+    }
+
+    if (isLoggedIn) {
+      try {
+        const { drillService } = await import('../services/drillService');
+        const { getAuth } = await import('firebase/auth');
+        const auth = getAuth();
+        const user = auth.currentUser;
+        if (user) {
+          await drillService.deductCredits(user.uid, 5);
+        }
+      } catch (err: any) {
+        if (err.message === "Insufficient credits") {
+          // We need a way to trigger the pricing modal from here
+          // For now, alert the user, but in a real app we'd use a context or event
+          alert("Insufficient credits. Please upgrade your plan.");
+          return;
+        }
+        console.error("Credit deduction failed:", err);
+        return;
+      }
+    }
+
     setIsUpdating(true);
     setIsRetrying(false);
     try {
@@ -312,7 +341,7 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
               </div>
               {!readOnly && (
                 <div className="flex items-center gap-1">
-                  {isLoggedIn && onSave && (
+                  {onSave && (
                     <button 
                       onClick={onSave} 
                       className="p-3 text-slate-300 hover:text-emerald-500 transition-colors"
@@ -429,9 +458,10 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
                   <button 
                     type="submit" 
                     disabled={!refineText.trim() || isUpdating}
-                    className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest disabled:opacity-30 hover:bg-slate-800 transition-all shadow-xl h-12 flex items-center justify-center"
+                    className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest disabled:opacity-30 hover:bg-slate-800 transition-all shadow-xl h-12 flex flex-col items-center justify-center leading-tight"
                   >
-                    {isUpdating ? 'UPDATING...' : 'REFINE'}
+                    <span>{isUpdating ? 'UPDATING...' : 'REFINE'}</span>
+                    {!isUpdating && <span className="text-[10px] opacity-80 font-bold">5 ⚽</span>}
                   </button>
                 </div>
               </div>

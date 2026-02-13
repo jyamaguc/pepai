@@ -9,7 +9,8 @@ import {
   doc,
   getDoc,
   updateDoc,
-  setDoc
+  setDoc,
+  increment
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Drill } from "@/types/types";
@@ -92,25 +93,43 @@ export const drillService = {
       const userDoc = await getDoc(userDocRef);
       
       if (!userDoc.exists()) {
-        await updateDoc(userDocRef, {
-          email: email || "",
-          createdAt: Timestamp.now(),
-          stripeCustomerId: "", // Placeholder for future Stripe integration
-        });
-      }
-    } catch (error: any) {
-      // If document doesn't exist, updateDoc fails, so we use setDoc (via updateDoc with upsert logic or just setDoc)
-      // Actually, let's use setDoc for simplicity if it doesn't exist.
-      if (error.code === 'not-found' || error.code === 'permission-denied') {
-        const { setDoc } = await import("firebase/firestore");
-        await setDoc(doc(db, USERS_COLLECTION, userId), {
+        await setDoc(userDocRef, {
           email: email || "",
           createdAt: Timestamp.now(),
           stripeCustomerId: "",
+          credits: 10, // Initialize with 10 free credits
+          tier: "free",
+          can_save: false,
+          can_export: false
         });
-      } else {
-        console.error("Error ensuring user exists:", error);
       }
+    } catch (error: any) {
+      console.error("Error ensuring user exists:", error);
+    }
+  },
+
+  async deductCredits(userId: string, amount: number = 5) {
+    try {
+      const userDocRef = doc(db, USERS_COLLECTION, userId);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (!userDoc.exists()) {
+        throw new Error("User document not found");
+      }
+
+      const currentCredits = userDoc.data()?.credits || 0;
+      if (currentCredits < amount) {
+        throw new Error("Insufficient credits");
+      }
+
+      await updateDoc(userDocRef, {
+        credits: increment(-amount)
+      });
+      
+      return true;
+    } catch (error) {
+      console.error("Error deducting credits:", error);
+      throw error;
     }
   }
 };

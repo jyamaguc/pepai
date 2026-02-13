@@ -1,0 +1,11 @@
+{
+  "projects": {},
+  "targets": {},
+  "etags": {
+    "gen-lang-client-0420071219": {
+      "extensionInstances": {
+        "firestore-stripe-payments": "f3592a6c69d00ad2285185443c924d273f7e6a3cc72aea96687db2afb8f152c9"
+      }
+    }
+  }
+}

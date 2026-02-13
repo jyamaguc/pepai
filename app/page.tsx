@@ -9,13 +9,16 @@ import VoiceAssistant from '@/components/VoiceAssistant';
 import PitchVisualizer from '@/components/PitchVisualizer';
 import { useAuth } from '@/context/AuthContext';
 import { AuthModal } from '@/components/auth/AuthModal';
+import { PricingTable } from '@/components/payments/PricingTable';
 import { drillService, FirestoreDrill } from '@/services/drillService';
 import { Timestamp } from 'firebase/firestore';
 
 const App: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, subscription } = useAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [selectedHistoryDrill, setSelectedHistoryDrill] = useState<FirestoreDrill | null>(null);
   const [drillHistory, setDrillHistory] = useState<FirestoreDrill[]>([]);
   const [isMounted, setIsMounted] = useState(false);
   const [prompt, setPrompt] = useState('');
@@ -27,7 +30,7 @@ const App: React.FC = () => {
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [session, setSession] = useState<Session>({ 
     id: 'initial-id', 
-    title: 'Academy Session', 
+    title: 'Training Session', 
     date: '', 
     team: 'First Team', 
     drills: [], 
@@ -88,6 +91,19 @@ const App: React.FC = () => {
     setIsRetrying(false);
     setError(null);
     try {
+      // Check credits before generating
+      if (user) {
+        try {
+          await drillService.deductCredits(user.uid, 5);
+        } catch (err: any) {
+          if (err.message === "Insufficient credits") {
+            setIsPricingOpen(true);
+            return;
+          }
+          throw err;
+        }
+      }
+
       const stream = generateDrillStream(prompt);
       let lastText = "";
       for await (const text of stream) { 
@@ -128,6 +144,17 @@ const App: React.FC = () => {
 
   const handleShare = async () => {
     if (session.drills.length === 0 || isSharing) return;
+    
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!subscription?.can_export) {
+      setIsPricingOpen(true);
+      return;
+    }
+
     setIsSharing(true);
     
     try {
@@ -148,7 +175,18 @@ const App: React.FC = () => {
   };
 
   const handleSaveAll = async () => {
-    if (!user || session.drills.length === 0 || isSavingAll) return;
+    if (session.drills.length === 0 || isSavingAll) return;
+    
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+    
+    if (!subscription?.can_save) {
+      setIsPricingOpen(true);
+      return;
+    }
+
     setIsSavingAll(true);
     try {
       await drillService.saveMultipleDrills(user.uid, session.drills);
@@ -165,7 +203,16 @@ const App: React.FC = () => {
   };
 
   const handleSaveDrill = async (drill: Drill) => {
-    if (!user) return;
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    if (!subscription?.can_save) {
+      setIsPricingOpen(true);
+      return;
+    }
+
     try {
       const newId = await drillService.saveDrill(user.uid, drill);
       setShareFeedback('Drill saved to history!');
@@ -195,6 +242,7 @@ const App: React.FC = () => {
     const reusedDrill = { ...drill, id: crypto.randomUUID() };
     setSession(prev => ({ ...prev, drills: [...prev.drills, reusedDrill] }));
     setIsHistoryOpen(false);
+    setSelectedHistoryDrill(null);
   };
 
   const updateDrill = (updated: Drill) => setSession(prev => ({ ...prev, drills: prev.drills.map(d => d.id === updated.id ? updated : d) }));
@@ -209,6 +257,16 @@ const App: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">Pep<span className="text-emerald-600">AI</span></h1>
         </div>
         <div className="flex items-center gap-4">
+          {user && subscription && (
+            <div className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-2xl border border-slate-200 shadow-inner">
+              <span className="text-lg">⚽</span>
+              <span className={`text-sm font-black ${subscription.credits === 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                {subscription.credits}
+              </span>
+              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Credits</span>
+            </div>
+          )}
+
           {shareFeedback && (
             <span className="text-emerald-600 text-xs font-bold animate-in fade-in slide-in-from-right-2">
               {shareFeedback}
@@ -221,20 +279,13 @@ const App: React.FC = () => {
                 onClick={() => setIsHistoryOpen(true)}
                 className="text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-emerald-600 transition-colors"
               >
-                History
+                Saved Drills
               </button>
               <button 
                 onClick={logout}
                 className="text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-red-600 transition-colors"
               >
                 Logout
-              </button>
-              <button 
-                onClick={handleShare} 
-                disabled={session.drills.length === 0 || isSharing}
-                className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-20 transition-all flex items-center gap-3"
-              >
-                {isSharing ? 'Generating...' : 'Share Session'}
               </button>
             </div>
           ) : (
@@ -330,7 +381,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[60] flex justify-end bg-black/50 backdrop-blur-sm">
           <div className="h-full w-full max-w-md bg-white p-8 shadow-2xl animate-in slide-in-from-right duration-300">
             <div className="mb-8 flex items-center justify-between">
-              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Drill History</h2>
+              <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Saved Drills</h2>
               <button onClick={() => setIsHistoryOpen(false)} className="text-slate-400 hover:text-slate-900">✕</button>
             </div>
             <div className="space-y-4 overflow-y-auto max-h-[calc(100vh-150px)] pr-2">
@@ -341,7 +392,7 @@ const App: React.FC = () => {
                   <div 
                     key={drill.id} 
                     className="group bg-slate-50 p-6 rounded-2xl border-2 border-transparent hover:border-emerald-500 transition-all cursor-pointer"
-                    onClick={() => reuseDrill(drill)}
+                    onClick={() => setSelectedHistoryDrill(drill)}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <h3 className="font-black text-slate-900 uppercase tracking-tight">{drill.name}</h3>
@@ -350,7 +401,7 @@ const App: React.FC = () => {
                     <p className="text-xs text-slate-500 font-medium line-clamp-2 mb-4">{drill.setup}</p>
                     <div className="flex justify-between items-center">
                       <span className="text-[10px] font-bold text-slate-400">{new Date(drill.createdAt.seconds * 1000).toLocaleDateString()}</span>
-                      <span className="text-[10px] font-black text-emerald-600 group-hover:translate-x-1 transition-transform">REUSE →</span>
+                      <span className="text-[10px] font-black text-emerald-600 group-hover:translate-x-1 transition-transform">VIEW DETAILS →</span>
                     </div>
                   </div>
                 ))
@@ -360,39 +411,138 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
-
-      <div className="fixed bottom-0 left-0 w-full bg-white/80 backdrop-blur-xl border-t border-slate-200 p-8 z-40">
-        <div className="max-w-[1400px] mx-auto">
-          <form onSubmit={handleGenerate} className="flex flex-col gap-2 relative">
-            <div className="relative flex items-center">
-              <input 
-                type="text" 
-                placeholder="Describe a drill: 'A 5v5 rondo with two neutrals...'" 
-                className="flex-1 bg-slate-100 rounded-2xl pl-8 pr-48 py-5 text-xl font-bold outline-none border-4 border-transparent focus:bg-white focus:border-emerald-500 shadow-inner"
-                value={prompt}
-                onChange={e => {
-                  setPrompt(e.target.value);
-                  if (error) setError(null);
-                }}
-                disabled={isGenerating}
-              />
-              <div className="absolute right-3 flex items-center gap-3">
-                <VoiceAssistant 
-                  session={session} 
-                  currentDrill={latestDrill}
-                  onUpdateDrill={updateDrill}
-                  onTranscriptChange={setPrompt} 
-                  isProcessing={isGenerating} 
-                />
+      {/* Drill Detail Pop-up */}
+      {selectedHistoryDrill && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 lg:p-12">
+          <div className="bg-white w-full max-w-6xl max-h-[90vh] rounded-[3rem] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg font-black text-lg">P</div>
+                <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Drill Details</h2>
+              </div>
+              <div className="flex items-center gap-4">
                 <button 
-                  type="submit" 
-                  disabled={!prompt.trim() || isGenerating} 
-                  className="px-8 py-4 bg-emerald-600 text-white rounded-xl font-black text-sm uppercase tracking-widest hover:bg-emerald-700 shadow-lg disabled:opacity-50 transition-all h-14"
+                  onClick={() => reuseDrill(selectedHistoryDrill)}
+                  className="bg-emerald-600 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg flex items-center gap-2"
                 >
-                  {isGenerating ? 'Drafting...' : 'Create'}
+                  Reuse Drill →
+                </button>
+                <button 
+                  onClick={() => setSelectedHistoryDrill(null)} 
+                  className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-all"
+                >
+                  ✕
                 </button>
               </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+              <DrillCard 
+                drill={selectedHistoryDrill} 
+                onRemove={() => {}} // No-op in history view
+                onUpdateDrill={() => {}} // No-op in history view
+                readOnly={true}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+
+      {isPricingOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 lg:p-12">
+          <div className="bg-white w-full max-w-6xl max-h-[90vh] rounded-[3rem] shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
+            <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center text-white shadow-lg font-black text-lg">P</div>
+                <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Upgrade Required</h2>
+              </div>
+              <button 
+                onClick={() => setIsPricingOpen(false)} 
+                className="w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:text-slate-900 hover:bg-slate-200 transition-all"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-8 lg:p-12">
+              <div className="text-center mb-12">
+                <p className="text-xl text-slate-600 font-medium">
+                  This feature is only available on professional plans. Upgrade now to unlock full access.
+                </p>
+              </div>
+              <PricingTable />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="fixed bottom-0 left-0 w-full bg-white/80 backdrop-blur-xl border-t border-slate-200 p-8 z-40">
+        <div className="w-full px-8">
+          <form onSubmit={handleGenerate} className="flex flex-col gap-6">
+            <div className="flex items-center gap-12">
+              <div className="relative flex-1 flex items-center">
+                <input 
+                  type="text" 
+                  placeholder="Describe a drill: 'A 5v5 rondo with two neutrals...'" 
+                  className="w-full bg-slate-100 rounded-2xl pl-8 pr-48 py-5 text-xl font-bold outline-none border-4 border-transparent focus:bg-white focus:border-emerald-500 shadow-inner"
+                  value={prompt}
+                  onChange={e => {
+                    setPrompt(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  disabled={isGenerating}
+                />
+                <div className="absolute right-3 flex items-center gap-3">
+                  <VoiceAssistant 
+                    session={session} 
+                    currentDrill={latestDrill}
+                    onUpdateDrill={updateDrill}
+                    onTranscriptChange={setPrompt} 
+                    isProcessing={isGenerating} 
+                  />
+                  <button 
+                    type="submit" 
+                    disabled={!prompt.trim() || isGenerating} 
+                    className="px-8 py-4 bg-emerald-600 text-white rounded-xl font-black text-sm uppercase tracking-widest hover:bg-emerald-700 shadow-lg disabled:opacity-50 transition-all h-14 flex flex-col items-center justify-center leading-tight"
+                  >
+                    <span>{isGenerating ? 'Drafting...' : 'Create'}</span>
+                    {!isGenerating && <span className="text-[10px] opacity-80 font-bold">5 ⚽</span>}
+                  </button>
+                </div>
+              </div>
+              
+            <div className="flex items-center gap-3 ml-auto">
+              <button 
+                type="button"
+                onClick={handleSaveAll}
+                disabled={isSavingAll || session.drills.length === 0}
+                className="px-6 py-3 bg-white border-2 border-emerald-600 text-emerald-600 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 shadow-md disabled:opacity-20 transition-all h-12 flex items-center gap-2 whitespace-nowrap"
+              >
+                {isSavingAll ? (
+                  <div className="w-3 h-3 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                )}
+                {isSavingAll ? 'Saving...' : 'Save Drills'}
+              </button>
+              <button 
+                type="button"
+                onClick={handleShare} 
+                disabled={isSharing || session.drills.length === 0}
+                className="bg-slate-900 text-white px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-20 transition-all h-12 flex items-center gap-2 whitespace-nowrap shadow-md"
+              >
+                {isSharing ? (
+                  <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6a3 3 0 010-2.684m0 2.684l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                  </svg>
+                )}
+                {isSharing ? 'Generating...' : 'Share Session'}
+              </button>
+            </div>
             </div>
             {error && (
               <p className="text-red-500 text-xs font-bold ml-4 animate-in fade-in slide-in-from-top-1">
