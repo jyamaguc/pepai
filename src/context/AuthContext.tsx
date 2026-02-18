@@ -13,6 +13,7 @@ export interface SubscriptionData {
   status: string;
   tier: string;
   credits: number;
+  pepPoints: number;
   can_save: boolean;
   can_export: boolean;
 }
@@ -58,7 +59,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setSubscription(prev => ({
           status: prev?.status || 'free',
           tier: data.tier || 'free',
-          credits: data.credits !== undefined ? data.credits : 10,
+          credits: data.credits !== undefined ? data.credits : 0,
+          pepPoints: data.pepPoints !== undefined ? data.pepPoints : 2,
           can_save: data.can_save === true || data.can_save === 'true',
           can_export: data.can_export === true || data.can_export === 'true',
         }));
@@ -67,7 +69,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setSubscription({
           status: 'free',
           tier: 'free',
-          credits: 10,
+          credits: 0,
+          pepPoints: 2,
           can_save: false,
           can_export: false,
         });

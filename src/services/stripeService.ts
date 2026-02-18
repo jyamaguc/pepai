@@ -95,11 +95,18 @@ export const getActiveProductsWithPrices = async (): Promise<Product[]> => {
  * Creates a checkout session for a user.
  * The Stripe Firebase Extension listens to the 'checkout_sessions' subcollection under 'customers'.
  */
-export const createCheckoutSession = async (uid: string, priceId: string) => {
+export const createCheckoutSession = async (
+  uid: string, 
+  priceId: string, 
+  mode: 'subscription' | 'payment' = 'subscription',
+  metadata: Record<string, any> = {}
+) => {
   const checkoutSessionsRef = collection(db, 'customers', uid, 'checkout_sessions');
   
   const docRef = await addDoc(checkoutSessionsRef, {
     price: priceId,
+    mode: mode,
+    metadata: metadata,
     success_url: window.location.origin,
     cancel_url: window.location.origin,
   });

@@ -3,20 +3,37 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { compressSession } from '@/services/compressionService';
 import { generateDrillStream, refineDrillStream, processDrillJson } from '@/services/geminiService';
-import { Drill, Session, PitchLayout, PositionType, createEmptyDrill } from '@/types/types';
+import { Drill, Session, PitchLayout, PositionType, createEmptyDrill, DrillType, DRILL_TYPE_CONFIGS } from '@/types/types';
 import DrillCard from '@/components/DrillCard';
 import VoiceAssistant from '@/components/VoiceAssistant';
 import PitchVisualizer from '@/components/PitchVisualizer';
 import { useAuth } from '@/context/AuthContext';
 import { AuthModal } from '@/components/auth/AuthModal';
 import { PricingTable } from '@/components/payments/PricingTable';
+import { CurrencySelectionModal } from '@/components/payments/CurrencySelectionModal';
 import { drillService, FirestoreDrill } from '@/services/drillService';
 import { Timestamp } from 'firebase/firestore';
+import * as LucideIcons from 'lucide-react';
+
+const DrillTypeBadge: React.FC<{ type: DrillType }> = ({ type }) => {
+  const config = DRILL_TYPE_CONFIGS[type];
+  if (!config) return null;
+  const Icon = (LucideIcons as any)[config.icon];
+
+  return (
+    <div className={`flex items-center gap-1 ${config.color} ${config.textColor} border ${config.borderColor} px-1.5 py-0.5 rounded shadow-sm`}>
+      {Icon && <Icon size={8} strokeWidth={3} />}
+      <span className="text-[8px] font-black uppercase tracking-tight">{config.label}</span>
+    </div>
+  );
+};
 
 const App: React.FC = () => {
   const { user, logout, subscription } = useAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isCurrencyModalOpen, setIsCurrencyModalOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [selectedHistoryDrill, setSelectedHistoryDrill] = useState<FirestoreDrill | null>(null);
   const [drillHistory, setDrillHistory] = useState<FirestoreDrill[]>([]);
@@ -84,23 +101,55 @@ const App: React.FC = () => {
     return null; // Or a loading skeleton
   }
 
-  const handleGenerate = async (e?: React.FormEvent) => {
+  const handleGenerate = async (e?: React.FormEvent, selectedCurrency?: 'credits' | 'pepPoints') => {
     if (e) e.preventDefault();
     if (!prompt.trim() || isGenerating) return;
+
+    if (!user) {
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    console.log("handleGenerate called", { selectedCurrency, hasUser: !!user, hasSub: !!subscription });
+
+    // 1. If no currency selected, check availability and show modal if needed
+    if (!selectedCurrency && user && subscription) {
+      const canUseCredits = subscription.credits >= 5;
+      const canUsePoints = subscription.pepPoints >= 1;
+
+      console.log("Currency check", { canUseCredits, canUsePoints, credits: subscription.credits, points: subscription.pepPoints });
+
+      if (!canUseCredits && !canUsePoints) {
+        setIsPricingOpen(true);
+        return;
+      }
+
+      // ALWAYS show selection modal if the user has a choice (even if one is 0, they might want to see why they can't use it)
+      // Or more simply: if they have ANY credits AND ANY points, or if they have enough of both.
+      // The requirement said: "asking the user if they want to use credits or Pep Points"
+      
+      // Let's force the modal if they have a subscription OR points
+      if (canUseCredits || canUsePoints) {
+        console.log("Opening currency modal");
+        setIsCurrencyModalOpen(true);
+        setPendingAction(() => (currency: 'credits' | 'pepPoints') => handleGenerate(undefined, currency));
+        return;
+      }
+    }
+
     setIsGenerating(true);
     setIsRetrying(false);
     setError(null);
     try {
-      // Check credits before generating
-      if (user) {
+      // Check currency before generating
+      if (user && selectedCurrency) {
         try {
-          await drillService.deductCredits(user.uid, 5);
+          const cost = selectedCurrency === 'credits' ? 5 : 1;
+          await drillService.deductCurrency(user.uid, selectedCurrency, cost);
         } catch (err: any) {
-          if (err.message === "Insufficient credits") {
-            setIsPricingOpen(true);
-            return;
-          }
-          throw err;
+          console.error("Currency deduction failed:", err);
+          setIsPricingOpen(true);
+          return;
         }
       }
 
@@ -116,11 +165,11 @@ const App: React.FC = () => {
       }
       const newDrill = processDrillJson(JSON.parse(lastText));
       
-      // Save to Firestore if user is logged in
-      if (user) {
-        await drillService.saveDrill(user.uid, newDrill);
-        loadHistory();
-      }
+      // Removed automatic save to Firestore on generation
+      // if (user) {
+      //   await drillService.saveDrill(user.uid, newDrill);
+      //   loadHistory();
+      // }
 
       setSession(prev => ({ ...prev, drills: [...prev.drills, newDrill] }));
       setPrompt('');
@@ -258,12 +307,29 @@ const App: React.FC = () => {
         </div>
         <div className="flex items-center gap-4">
           {user && subscription && (
-            <div className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-2xl border border-slate-200 shadow-inner">
-              <span className="text-lg">⚽</span>
-              <span className={`text-sm font-black ${subscription.credits === 0 ? 'text-red-600' : 'text-slate-900'}`}>
-                {subscription.credits}
-              </span>
-              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Credits</span>
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setIsPricingOpen(true)}
+                className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-2xl border border-slate-200 shadow-inner hover:bg-slate-200 transition-colors cursor-pointer"
+                title="Upgrade or Buy Points"
+              >
+                <span className="text-lg">⚽</span>
+                <span className={`text-sm font-black ${subscription.credits < 5 ? 'text-red-600' : 'text-slate-900'}`}>
+                  {subscription.credits}
+                </span>
+                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Credits</span>
+              </button>
+              <button 
+                onClick={() => setIsPricingOpen(true)}
+                className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-2xl border border-slate-200 shadow-inner hover:bg-slate-200 transition-colors cursor-pointer"
+                title="Buy Pep Points"
+              >
+                <span className="text-lg">⚡</span>
+                <span className={`text-sm font-black ${subscription.pepPoints < 1 ? 'text-red-600' : 'text-slate-900'}`}>
+                  {subscription.pepPoints}
+                </span>
+                <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest ml-1">Pep Points</span>
+              </button>
             </div>
           )}
 
@@ -347,9 +413,41 @@ const App: React.FC = () => {
               onRemove={() => setSession(p => ({...p, drills: p.drills.filter(x => x.id !== d.id)}))}
               onUpdateDrill={updateDrill}
               onSave={() => handleSaveDrill(d)}
+              onUpgradeRequired={(callback?: any) => {
+                if (callback === 'AUTH') {
+                  setIsAuthModalOpen(true);
+                  return;
+                }
+                if (typeof callback === 'function' && subscription) {
+                  // This is a currency selection request
+                  const canUseCredits = subscription.credits >= 5;
+                  const canUsePoints = subscription.pepPoints >= 1;
+
+                  if (!canUseCredits && !canUsePoints) {
+                    setIsPricingOpen(true);
+                    return;
+                  }
+
+                  // Force modal if any currency is available
+                  setIsCurrencyModalOpen(true);
+                  setPendingAction(() => callback);
+                } else {
+                  // Legacy call
+                  setIsPricingOpen(true);
+                }
+              }}
               isLoggedIn={!!user}
             />
           ))}
+
+          {isGenerating && (
+            <div className="h-64 bg-white rounded-[3rem] border-4 border-dashed border-emerald-100 animate-pulse flex flex-col items-center justify-center gap-4">
+               <div className="w-12 h-12 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+               <p className="font-black text-emerald-600 uppercase tracking-widest text-sm">
+                 {isRetrying ? 'Pep is busy, retrying...' : 'Pep is drafting a drill...'}
+               </p>
+            </div>
+          )}
 
           <div className="flex justify-center pt-8">
             <button 
@@ -364,15 +462,6 @@ const App: React.FC = () => {
               <span className="text-xl font-black uppercase tracking-widest">Manually Add Drill</span>
             </button>
           </div>
-
-          {isGenerating && (
-            <div className="h-64 bg-white rounded-[3rem] border-4 border-dashed border-emerald-100 animate-pulse flex flex-col items-center justify-center gap-4">
-               <div className="w-12 h-12 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
-               <p className="font-black text-emerald-600 uppercase tracking-widest text-sm">
-                 {isRetrying ? 'Pep is busy, retrying...' : 'Pep is drafting a drill...'}
-               </p>
-            </div>
-          )}
         </div>
       </main>
 
@@ -396,7 +485,15 @@ const App: React.FC = () => {
                   >
                     <div className="flex justify-between items-start mb-2">
                       <h3 className="font-black text-slate-900 uppercase tracking-tight">{drill.name}</h3>
-                      <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">{drill.category}</span>
+                      <div className="flex flex-wrap gap-1 justify-end max-w-[120px]">
+                        {drill.categories && drill.categories.length > 0 ? (
+                          drill.categories.map(type => (
+                            <DrillTypeBadge key={type} type={type} />
+                          ))
+                        ) : (
+                          <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">{(drill as any).category || 'Tactical'}</span>
+                        )}
+                      </div>
                     </div>
                     <p className="text-xs text-slate-500 font-medium line-clamp-2 mb-4">{drill.setup}</p>
                     <div className="flex justify-between items-center">
@@ -448,6 +545,20 @@ const App: React.FC = () => {
       )}
 
       <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
+
+      <CurrencySelectionModal 
+        isOpen={isCurrencyModalOpen}
+        onClose={() => setIsCurrencyModalOpen(false)}
+        credits={subscription?.credits || 0}
+        pepPoints={subscription?.pepPoints || 0}
+        onSelect={(type) => {
+          setIsCurrencyModalOpen(false);
+          if (pendingAction) {
+            (pendingAction as any)(type);
+            setPendingAction(null);
+          }
+        }}
+      />
 
       {isPricingOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 lg:p-12">
@@ -506,7 +617,7 @@ const App: React.FC = () => {
                     className="px-8 py-4 bg-emerald-600 text-white rounded-xl font-black text-sm uppercase tracking-widest hover:bg-emerald-700 shadow-lg disabled:opacity-50 transition-all h-14 flex flex-col items-center justify-center leading-tight"
                   >
                     <span>{isGenerating ? 'Drafting...' : 'Create'}</span>
-                    {!isGenerating && <span className="text-[10px] opacity-80 font-bold">5 ⚽</span>}
+
                   </button>
                 </div>
               </div>

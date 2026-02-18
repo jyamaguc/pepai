@@ -97,7 +97,8 @@ export const drillService = {
           email: email || "",
           createdAt: Timestamp.now(),
           stripeCustomerId: "",
-          credits: 10, // Initialize with 10 free credits
+          credits: 0, 
+          pepPoints: 2, // New users start with 2 Pep Points
           tier: "free",
           can_save: false,
           can_export: false
@@ -108,7 +109,7 @@ export const drillService = {
     }
   },
 
-  async deductCredits(userId: string, amount: number = 5) {
+  async deductCurrency(userId: string, type: 'credits' | 'pepPoints', amount: number) {
     try {
       const userDocRef = doc(db, USERS_COLLECTION, userId);
       const userDoc = await getDoc(userDocRef);
@@ -117,18 +118,20 @@ export const drillService = {
         throw new Error("User document not found");
       }
 
-      const currentCredits = userDoc.data()?.credits || 0;
-      if (currentCredits < amount) {
-        throw new Error("Insufficient credits");
+      const userData = userDoc.data();
+      const currentBalance = userData?.[type] || 0;
+      
+      if (currentBalance < amount) {
+        throw new Error(`Insufficient ${type === 'credits' ? 'credits' : 'Pep Points'}`);
       }
 
       await updateDoc(userDocRef, {
-        credits: increment(-amount)
+        [type]: increment(-amount)
       });
       
       return true;
     } catch (error) {
-      console.error("Error deducting credits:", error);
+      console.error(`Error deducting ${type}:`, error);
       throw error;
     }
   }

@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
-import { Drill, PositionType, PitchLayout, ArrowType } from "../types/types";
+import { Drill, PositionType, PitchLayout, ArrowType, DrillType } from "../types/types";
 
 // Lazy initialization to avoid crashing during SSR if key is missing
 let aiInstance: GoogleGenAI | null = null;
@@ -65,7 +65,11 @@ const drillSchema = {
   type: Type.OBJECT,
   properties: {
     name: { type: Type.STRING, description: "Catchy name for the drill" },
-    category: { type: Type.STRING, description: "e.g., Possession, Finishing, Transition" },
+    categories: { 
+      type: Type.ARRAY, 
+      items: { type: Type.STRING, enum: ["Technical", "Physical", "Tactical", "Situational", "Mental", "Play"] },
+      description: "Select one or more categories that best describe the drill."
+    },
     duration: { type: Type.STRING, description: "e.g., 15 mins" },
     players: { type: Type.STRING, description: "e.g., 8+2" },
     layout: { type: Type.STRING, enum: ["full", "half", "grid"] },
@@ -116,7 +120,7 @@ const drillSchema = {
       }
     }
   },
-  required: ["name", "category", "duration", "players", "layout", "setup", "instructions", "coachingPoints", "positions", "arrows"]
+  required: ["name", "categories", "duration", "players", "layout", "setup", "instructions", "coachingPoints", "positions", "arrows"]
 };
 
 const MODEL_NAME = 'gemini-3-flash-preview';
@@ -227,6 +231,29 @@ export function processDrillJson(rawJson: any, existingId?: string): Drill {
 
   // If the response is wrapped in a "drill" key
   const drillData = data.drill || data;
+
+  // Migration: If legacy 'category' exists but 'categories' doesn't
+  if (drillData.category && !drillData.categories) {
+    const legacyCategory = drillData.category;
+    // Map legacy category to closest DrillType if possible, else default to TACTICAL
+    const mapping: Record<string, DrillType> = {
+      'Technical': DrillType.TECHNICAL,
+      'Physical': DrillType.PHYSICAL,
+      'Tactical': DrillType.TACTICAL,
+      'Situational': DrillType.SITUATIONAL,
+      'Mental': DrillType.MENTAL,
+      'Warm-up': DrillType.TECHNICAL,
+      'Possession': DrillType.TACTICAL,
+      'Finishing': DrillType.TECHNICAL,
+      'Transition': DrillType.TACTICAL
+    };
+    drillData.categories = [mapping[legacyCategory] || DrillType.TACTICAL];
+  }
+
+  // Ensure categories is always an array
+  if (!drillData.categories || !Array.isArray(drillData.categories)) {
+    drillData.categories = [DrillType.TACTICAL];
+  }
 
   return {
     ...drillData,

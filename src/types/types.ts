@@ -5,6 +5,68 @@ export enum PositionType {
   GOAL = 'goal'
 }
 
+export enum DrillType {
+  TECHNICAL = 'Technical',
+  PHYSICAL = 'Physical',
+  TACTICAL = 'Tactical',
+  SITUATIONAL = 'Situational',
+  MENTAL = 'Mental',
+  PLAY = 'Play'
+}
+
+export interface DrillTypeConfig {
+  label: string;
+  icon: string; // Lucide icon name
+  color: string; // Tailwind bg color (pastel)
+  textColor: string; // Tailwind text color
+  borderColor: string; // Tailwind border color
+}
+
+export const DRILL_TYPE_CONFIGS: Record<DrillType, DrillTypeConfig> = {
+  [DrillType.TECHNICAL]: {
+    label: 'Technical',
+    icon: 'Zap',
+    color: 'bg-blue-50',
+    textColor: 'text-blue-700',
+    borderColor: 'border-blue-100'
+  },
+  [DrillType.PHYSICAL]: {
+    label: 'Physical',
+    icon: 'Activity',
+    color: 'bg-red-50',
+    textColor: 'text-red-700',
+    borderColor: 'border-red-100'
+  },
+  [DrillType.TACTICAL]: {
+    label: 'Tactical',
+    icon: 'Target',
+    color: 'bg-emerald-50',
+    textColor: 'text-emerald-700',
+    borderColor: 'border-emerald-100'
+  },
+  [DrillType.SITUATIONAL]: {
+    label: 'Situational',
+    icon: 'Users',
+    color: 'bg-amber-50',
+    textColor: 'text-amber-700',
+    borderColor: 'border-amber-100'
+  },
+  [DrillType.MENTAL]: {
+    label: 'Mental',
+    icon: 'Brain',
+    color: 'bg-purple-50',
+    textColor: 'text-purple-700',
+    borderColor: 'border-purple-100'
+  },
+  [DrillType.PLAY]: {
+    label: 'Play',
+    icon: 'Play',
+    color: 'bg-indigo-50',
+    textColor: 'text-indigo-700',
+    borderColor: 'border-indigo-100'
+  }
+};
+
 export enum ArrowType {
   PASS = 'pass',
   DRIBBLE = 'dribble',
@@ -43,7 +105,7 @@ export interface PitchPosition {
 export interface Drill {
   id: string;
   name: string;
-  category: string;
+  categories: DrillType[];
   duration: string;
   players: string;
   setup: string;
@@ -66,7 +128,7 @@ export interface Session {
 export const createEmptyDrill = (): Drill => ({
   id: crypto.randomUUID(),
   name: 'New Drill',
-  category: 'Tactical',
+  categories: [DrillType.TACTICAL],
   duration: '15m',
   players: '10',
   setup: 'Basic area setup.',

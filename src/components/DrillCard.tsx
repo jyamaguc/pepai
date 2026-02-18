@@ -1,55 +1,109 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Drill, PitchPosition, DrillArrow, PitchLayout, PositionType } from '../types/types';
+import { Drill, PitchPosition, DrillArrow, PitchLayout, PositionType, DrillType, DRILL_TYPE_CONFIGS } from '../types/types';
 import PitchVisualizer, { TacticalTool } from './PitchVisualizer';
 import VoiceAssistant from './VoiceAssistant';
 import { refineDrillStream, processDrillJson } from '../services/geminiService';
+import * as LucideIcons from 'lucide-react';
+
+const DrillTypeBadge: React.FC<{ type: DrillType; onRemove?: () => void; readOnly?: boolean }> = ({ type, onRemove, readOnly }) => {
+  const config = DRILL_TYPE_CONFIGS[type];
+  const Icon = (LucideIcons as any)[config.icon];
+
+  return (
+    <div className={`flex items-center gap-1.5 ${config.color} ${config.textColor} border ${config.borderColor} px-2.5 py-1 rounded-lg shadow-sm transition-all hover:shadow-md`}>
+      {Icon && <Icon size={12} strokeWidth={3} />}
+      <span className="text-[10px] font-black uppercase tracking-wider">{config.label}</span>
+      {!readOnly && onRemove && (
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="ml-1 hover:text-red-500 transition-colors"
+        >
+          <LucideIcons.X size={10} strokeWidth={3} />
+        </button>
+      )}
+    </div>
+  );
+};
 
 interface DrillCardProps {
   drill: Drill;
   onRemove: () => void;
   onUpdateDrill: (updated: Drill) => void;
   onSave?: () => void;
+  onUpgradeRequired?: (callback?: any) => void;
   isLoggedIn?: boolean;
   streaming?: boolean;
   readOnly?: boolean;
 }
 
-const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, onSave, isLoggedIn, streaming, readOnly = false }) => {
+const DrillCard: React.FC<DrillCardProps> = ({ 
+  drill, 
+  onRemove, 
+  onUpdateDrill, 
+  onSave, 
+  onUpgradeRequired,
+  isLoggedIn, 
+  streaming, 
+  readOnly = false 
+}) => {
   const [refineText, setRefineText] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [activeTool, setActiveTool] = useState<TacticalTool>('select');
   const [selectedPositionIdx, setSelectedPositionIdx] = useState<number>(-1);
   const [selectedArrowId, setSelectedArrowId] = useState<string | null>(null);
+  const [isTypeSelectorOpen, setIsTypeSelectorOpen] = useState(false);
+  const typeSelectorRef = useRef<HTMLDivElement>(null);
 
-  const handleRefine = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (typeSelectorRef.current && !typeSelectorRef.current.contains(event.target as Node)) {
+        setIsTypeSelectorOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggleType = (type: DrillType) => {
+    if (readOnly) return;
+    const currentCategories = drill.categories || [];
+    const newCategories = currentCategories.includes(type)
+      ? currentCategories.filter(t => t !== type)
+      : [...currentCategories, type];
+    
+    // Ensure at least one type is selected
+    if (newCategories.length === 0) return;
+    
+    updateField('categories', newCategories);
+  };
+
+  const handleRefine = async (e?: React.FormEvent, selectedCurrency?: 'credits' | 'pepPoints') => {
+    if (e) e.preventDefault();
     if (!refineText.trim() || isUpdating || readOnly) return;
     
-    // Deduct credits before refining
     if (!isLoggedIn) {
-      // For now, we'll just alert or you could open the auth modal if you had access to it
-      alert("Please login to refine drills.");
+      if (onUpgradeRequired) {
+        // We'll reuse onUpgradeRequired to trigger the parent's auth modal
+        (onUpgradeRequired as any)('AUTH');
+      } else {
+        alert("Please login to refine drills.");
+      }
       return;
     }
 
-    if (isLoggedIn) {
-      try {
-        const { drillService } = await import('../services/drillService');
-        const { getAuth } = await import('firebase/auth');
-        const auth = getAuth();
-        const user = auth.currentUser;
-        if (user) {
-          await drillService.deductCredits(user.uid, 5);
-        }
-      } catch (err: any) {
-        if (err.message === "Insufficient credits") {
-          // We need a way to trigger the pricing modal from here
-          // For now, alert the user, but in a real app we'd use a context or event
-          alert("Insufficient credits. Please upgrade your plan.");
-          return;
-        }
-        console.error("Credit deduction failed:", err);
+    // 1. If no currency selected, check availability and show modal if needed
+    if (!selectedCurrency && isLoggedIn) {
+      // We need to check credits/points here. Since we don't have subscription prop directly,
+      // we'll fetch them from the user doc or use a callback.
+      // For now, we'll use a simplified check or assume the parent handles it.
+      // Actually, let's add a callback to the parent to handle the currency selection.
+      if (onUpgradeRequired) {
+        // We'll reuse onUpgradeRequired to trigger the parent's currency selection
+        (onUpgradeRequired as any)((currency: 'credits' | 'pepPoints') => handleRefine(undefined, currency));
         return;
       }
     }
@@ -57,6 +111,16 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
     setIsUpdating(true);
     setIsRetrying(false);
     try {
+      if (isLoggedIn && selectedCurrency) {
+        const { drillService } = await import('../services/drillService');
+        const { getAuth } = await import('firebase/auth');
+        const auth = getAuth();
+        const user = auth.currentUser;
+        if (user) {
+          const cost = selectedCurrency === 'credits' ? 5 : 1;
+          await drillService.deductCurrency(user.uid, selectedCurrency, cost);
+        }
+      }
       const stream = refineDrillStream(drill, refineText);
       let lastText = "";
       for await (const text of stream) {
@@ -312,13 +376,62 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
                     placeholder="Drill Name"
                   />
                 )}
-                <div className="flex flex-wrap gap-3">
-                  <div className="flex items-center gap-1 bg-emerald-100 px-3 py-1 rounded-lg">
-                    <span className="text-[8px] font-black text-emerald-500 uppercase">Type:</span>
+                <div className="flex flex-wrap gap-3 items-center">
+                  <div className="flex flex-wrap gap-2 items-center bg-slate-50/50 p-1.5 rounded-2xl border border-slate-100">
                     {readOnly ? (
-                      <span className="text-emerald-700 text-[10px] font-black uppercase">{drill.category}</span>
+                      (drill.categories || []).map(type => (
+                        <DrillTypeBadge key={type} type={type} readOnly />
+                      ))
                     ) : (
-                      <input value={drill.category} onChange={e => updateField('category', e.target.value)} className="bg-transparent text-emerald-700 text-[10px] font-black uppercase outline-none w-20" />
+                      <div className="relative" ref={typeSelectorRef}>
+                        <div className="flex flex-wrap gap-2 items-center">
+                          {(drill.categories || []).map(type => (
+                            <DrillTypeBadge 
+                              key={type} 
+                              type={type} 
+                              onRemove={() => toggleType(type)}
+                            />
+                          ))}
+                          <button
+                            onClick={() => setIsTypeSelectorOpen(!isTypeSelectorOpen)}
+                            className="flex items-center justify-center w-8 h-8 rounded-lg bg-white text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-all shadow-sm border border-slate-100"
+                            title="Add Type"
+                          >
+                            <LucideIcons.Plus size={16} strokeWidth={3} />
+                          </button>
+                        </div>
+
+                        {isTypeSelectorOpen && (
+                          <div className="absolute top-full left-0 mt-2 p-3 bg-white rounded-2xl shadow-2xl border border-slate-100 z-[60] min-w-[200px] animate-in fade-in zoom-in-95 duration-200">
+                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-3 ml-1">Select Types</p>
+                            <div className="flex flex-col gap-1.5">
+                              {Object.values(DrillType).map((type) => {
+                                const config = DRILL_TYPE_CONFIGS[type];
+                                const Icon = (LucideIcons as any)[config.icon];
+                                const isSelected = (drill.categories || []).includes(type);
+                                
+                                return (
+                                  <button
+                                    key={type}
+                                    onClick={() => toggleType(type)}
+                                    className={`flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${
+                                      isSelected 
+                                        ? `${config.color} ${config.textColor} font-black` 
+                                        : 'hover:bg-slate-50 text-slate-500 font-bold'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2.5">
+                                      {Icon && <Icon size={14} strokeWidth={isSelected ? 3 : 2} />}
+                                      <span className="text-xs uppercase tracking-wide">{config.label}</span>
+                                    </div>
+                                    {isSelected && <LucideIcons.Check size={14} strokeWidth={3} />}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                   <div className="flex items-center gap-1 bg-blue-100 px-3 py-1 rounded-lg">
@@ -344,10 +457,10 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
                   {onSave && (
                     <button 
                       onClick={onSave} 
-                      className="p-3 text-slate-300 hover:text-emerald-500 transition-colors"
+                      className="p-3 text-emerald-500 hover:text-emerald-600 transition-colors animate-pulse"
                       title="Save to History"
                     >
-                      <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M17.064 2.047a1.5 1.5 0 011.06.44l2.387 2.387a1.5 1.5 0 01.44 1.06V19.5a2 2 0 01-2 2H5.5a2 2 0 01-2-2V4.5a2 2 0 012-2h11.564zM15 4.5H6v6h9v-6zM15 19.5v-6H9v6h6z" />
                       </svg>
                     </button>
@@ -461,7 +574,7 @@ const DrillCard: React.FC<DrillCardProps> = ({ drill, onRemove, onUpdateDrill, o
                     className="bg-slate-900 text-white px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest disabled:opacity-30 hover:bg-slate-800 transition-all shadow-xl h-12 flex flex-col items-center justify-center leading-tight"
                   >
                     <span>{isUpdating ? 'UPDATING...' : 'REFINE'}</span>
-                    {!isUpdating && <span className="text-[10px] opacity-80 font-bold">5 ⚽</span>}
+                  
                   </button>
                 </div>
               </div>
