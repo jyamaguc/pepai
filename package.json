@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "build:no-lint": "next build --no-lint"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",
