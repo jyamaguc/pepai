@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Soccer Drill AI Coach",
+  title: "PepAI Practice Planner",
   description: "Create soccer drills with AI using natural language",
 };
 
