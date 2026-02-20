@@ -13,7 +13,7 @@ import {
   increment
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { Drill } from "@/types/types";
+import { Drill, Session } from "@/types/types";
 
 export interface FirestoreDrill extends Drill {
   userId: string;
