@@ -4,6 +4,7 @@ import React, { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { decompressSession } from '@/services/compressionService';
 import { Session } from '@/types/types';
+import { drillService } from '@/services/drillService';
 import DrillCard from '@/components/DrillCard';
 
 const ShareContent: React.FC = () => {
@@ -12,20 +13,38 @@ const ShareContent: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const data = searchParams.get('data');
-    if (data) {
-      try {
-        // Decompress session data using the compression service
-        const decodedSession = decompressSession(data);
-        if (!decodedSession) throw new Error("Decompression failed");
-        setSession(decodedSession);
-      } catch (err) {
-        console.error("Failed to decode session data:", err);
-        setError("Invalid share link. The session data could not be loaded.");
+    const fetchSession = async () => {
+      const id = searchParams.get('id');
+      const data = searchParams.get('data');
+
+      if (id) {
+        try {
+          const sharedSession = await drillService.getSharedSession(id);
+          if (sharedSession) {
+            setSession(sharedSession);
+          } else {
+            setError("Shared session not found.");
+          }
+        } catch (err) {
+          console.error("Failed to fetch shared session:", err);
+          setError("Failed to load the shared session.");
+        }
+      } else if (data) {
+        try {
+          // Backward compatibility for old compressed links
+          const decodedSession = decompressSession(data);
+          if (!decodedSession) throw new Error("Decompression failed");
+          setSession(decodedSession);
+        } catch (err) {
+          console.error("Failed to decode session data:", err);
+          setError("Invalid share link. The session data could not be loaded.");
+        }
+      } else {
+        setError("No session data found in the link.");
       }
-    } else {
-      setError("No session data found in the link.");
-    }
+    };
+
+    fetchSession();
   }, [searchParams]);
 
   if (error) {

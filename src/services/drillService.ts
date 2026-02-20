@@ -23,8 +23,39 @@ export interface FirestoreDrill extends Drill {
 
 const DRILLS_COLLECTION = "drills";
 const USERS_COLLECTION = "users";
+const SHARED_SESSIONS_COLLECTION = "shared_sessions";
 
 export const drillService = {
+  async shareSession(session: Session) {
+    try {
+      const sharedSessionRef = doc(collection(db, SHARED_SESSIONS_COLLECTION));
+      const sessionToShare = {
+        ...session,
+        id: sharedSessionRef.id,
+        sharedAt: Timestamp.now(),
+      };
+      await setDoc(sharedSessionRef, sessionToShare);
+      return sharedSessionRef.id;
+    } catch (error) {
+      console.error("Error sharing session:", error);
+      throw error;
+    }
+  },
+
+  async getSharedSession(id: string) {
+    try {
+      const sharedSessionRef = doc(db, SHARED_SESSIONS_COLLECTION, id);
+      const sharedSessionDoc = await getDoc(sharedSessionRef);
+      if (sharedSessionDoc.exists()) {
+        return sharedSessionDoc.data() as Session;
+      }
+      return null;
+    } catch (error) {
+      console.error("Error fetching shared session:", error);
+      throw error;
+    }
+  },
+
   async saveDrill(userId: string, drillData: Drill) {
     try {
       // Always generate a new ID for the document to ensure it saves as a new drill

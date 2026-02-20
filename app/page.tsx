@@ -207,9 +207,9 @@ const App: React.FC = () => {
     setIsSharing(true);
     
     try {
-      // Compress session data to keep the URL short
-      const compressed = compressSession(session);
-      const shareUrl = `${window.location.origin}/share?data=${compressed}`;
+      // Save session to Firestore and get a short ID
+      const sharedId = await drillService.shareSession(session);
+      const shareUrl = `${window.location.origin}/share?id=${sharedId}`;
       
       await navigator.clipboard.writeText(shareUrl);
       setShareFeedback('Link copied to clipboard!');
