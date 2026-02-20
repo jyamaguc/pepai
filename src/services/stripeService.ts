@@ -107,6 +107,7 @@ export const createCheckoutSession = async (
     price: priceId,
     mode: mode,
     metadata: metadata,
+    allow_promotion_codes: true,
     success_url: window.location.origin,
     cancel_url: window.location.origin,
   });
