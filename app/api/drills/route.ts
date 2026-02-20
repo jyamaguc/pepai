@@ -11,7 +11,7 @@ Respond with valid JSON only. Return exactly this shape: { "drill": { ... } }
 The drill object must have:
 - id (string, use a random UUID)
 - name (string)
-- categories (array of strings, choose one or more from: "Technical", "Physical", "Tactical", "Situational", "Mental", "Play")
+- categories (array of strings, choose one or more from: "Technical", "Physical", "Tactical", "Situational", "Mental", "Play", "Dual")
 - duration (string, e.g. "15m")
 - players (string, e.g. "8-12")
 - setup (string, how to set up the grid and players)

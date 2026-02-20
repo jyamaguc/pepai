@@ -39,12 +39,18 @@ export const drillService = {
       await setDoc(newDrillRef, drillToSave);
       return newDrillRef.id;
     } catch (error) {
+// #region agent log
+    fetch('http://127.0.0.1:7243/ingest/e6ac4867-a10c-4ed0-8bef-16e2af740160',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c01bf'},body:JSON.stringify({sessionId:'9c01bf',location:'src/services/drillService.ts:42',message:'saveDrill error',data:{error:error instanceof Error ? error.message : String(error),stack:error instanceof Error ? error.stack : undefined},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
       console.error("Error saving drill:", error);
       throw error;
     }
   },
 
   async saveMultipleDrills(userId: string, drills: Drill[]) {
+// #region agent log
+    fetch('http://127.0.0.1:7243/ingest/e6ac4867-a10c-4ed0-8bef-16e2af740160',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c01bf'},body:JSON.stringify({sessionId:'9c01bf',location:'src/services/drillService.ts:47',message:'saveMultipleDrills entry',data:{userId,drillsCount:drills.length},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+// #endregion
     try {
       const { writeBatch } = await import("firebase/firestore");
       const batch = writeBatch(db);
@@ -64,6 +70,9 @@ export const drillService = {
       
       await batch.commit();
     } catch (error) {
+// #region agent log
+    fetch('http://127.0.0.1:7243/ingest/e6ac4867-a10c-4ed0-8bef-16e2af740160',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c01bf'},body:JSON.stringify({sessionId:'9c01bf',location:'src/services/drillService.ts:67',message:'saveMultipleDrills error',data:{error:error instanceof Error ? error.message : String(error)},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
       console.error("Error saving multiple drills:", error);
       throw error;
     }

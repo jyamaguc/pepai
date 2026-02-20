@@ -11,7 +11,8 @@ export enum DrillType {
   TACTICAL = 'Tactical',
   SITUATIONAL = 'Situational',
   MENTAL = 'Mental',
-  PLAY = 'Play'
+  PLAY = 'Play',
+  DUAL = 'Dual'
 }
 
 export interface DrillTypeConfig {
@@ -64,6 +65,13 @@ export const DRILL_TYPE_CONFIGS: Record<DrillType, DrillTypeConfig> = {
     color: 'bg-indigo-50',
     textColor: 'text-indigo-700',
     borderColor: 'border-indigo-100'
+  },
+  [DrillType.DUAL]: {
+    label: 'Dual',
+    icon: 'Swords',
+    color: 'bg-slate-900',
+    textColor: 'text-white',
+    borderColor: 'border-slate-800'
   }
 };
 
