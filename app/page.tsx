@@ -252,9 +252,6 @@ const App: React.FC = () => {
   };
 
   const handleSaveDrill = async (drill: Drill) => {
-// #region agent log
-    fetch('http://127.0.0.1:7243/ingest/e6ac4867-a10c-4ed0-8bef-16e2af740160',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'9c01bf'},body:JSON.stringify({sessionId:'9c01bf',location:'app/page.tsx:254',message:'handleSaveDrill entry',data:{hasUser:!!user,canSave:subscription?.can_save},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-// #endregion
     if (!user) {
       setIsAuthModalOpen(true);
       return;

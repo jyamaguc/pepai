@@ -219,7 +219,7 @@ const DrillCard: React.FC<DrillCardProps> = ({
               </div>
             </div>
           )}
-          <div className={`${readOnly ? 'h-[400px]' : 'h-[700px]'} w-full shrink-0 transition-all duration-500`}>
+          <div className="h-[700px] w-full shrink-0 transition-all duration-500">
             <PitchVisualizer 
               drill={drill} 
               tool={activeTool}
